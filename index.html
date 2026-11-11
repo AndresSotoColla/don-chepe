@@ -20,6 +20,7 @@
       <h3>📱 Realidad aumentada (Android)</h3>
       <div class="row" role="radiogroup" style="margin:0 0 12px">
         <label class="check"><input type="radio" name="mode" value="go.html" checked> Directo (abre la cámara)</label>
+        <label class="check"><input type="radio" name="mode" value="ar.html?limpio"> Web sencillo (sin botones)</label>
         <label class="check"><input type="radio" name="mode" value="ar.html"> Web con botones</label>
       </div>
       <p id="modeHelp"></p>
@@ -58,6 +59,7 @@ const warn = document.getElementById('qrWarn');
 const help = document.getElementById('modeHelp');
 const HELP = {
   'go.html': 'Escanea el QR con la cámara del teléfono: se abre directamente el visor de RA de Android, Don Chepe aparece sobre el piso y habla. Requiere el proyecto publicado con HTTPS real (GitHub Pages).',
+  'ar.html?limpio': 'Escanea el QR, toca la pantalla una vez y apunta al piso: Don Chepe aparece solo y habla. Sin botones en pantalla. Si no detecta el piso, lo coloca frente a ti.',
   'ar.html': 'Escanea el QR, toca la pantalla una vez y apunta al piso: Don Chepe aparece solo. Incluye botones de gestos, tamaño y lip-sync en vivo. Funciona también en la red local con serve.py.',
 };
 let baseUrl = new URL('./', location.href).href;
@@ -96,7 +98,7 @@ async function init() {
     } catch (_) {}
   }
   // En red local el modo directo no funciona: se preselecciona la versión web
-  if (local) document.querySelector('input[value="ar.html"]').checked = true;
+  if (local) document.querySelector('input[value="ar.html?limpio"]').checked = true;
   refresh();
 }
 input.addEventListener('change', () => draw(input.value.trim()));

@@ -58,6 +58,8 @@ import { loadGlbActor } from './js/glb-actor.js';
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 const PREVIEW = params.has('preview'); // modo de prueba en escritorio (sin cámara)
+const LIMPIO = params.has('limpio');   // sin botones: solo cámara + personaje
+if (LIMPIO) document.getElementById('bar').classList.add('hidden');
 
 /* ---------- Escena ---------- */
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -139,7 +141,7 @@ function placeInFront() {
   if (dir.lengthSq() < 1e-6) dir.set(0, 0, -1);
   dir.normalize();
   placeAt(new THREE.Matrix4().makeTranslation(p.x + dir.x * 1.8, p.y - 1.4, p.z + dir.z * 1.8));
-  setMsg('No detecté el piso: lo puse frente a ti. Usa 📍 Mover y apunta a una superficie con textura.', true);
+  setMsg(LIMPIO ? '¡Aquí está Don Chepe!' : 'No detecté el piso: lo puse frente a ti. Usa 📍 Mover y apunta a una superficie con textura.', !LIMPIO);
 }
 let session = null;
 const H = anim.root.userData.height || 1.8;
