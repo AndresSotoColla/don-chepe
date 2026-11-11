@@ -4,7 +4,8 @@
  * que ar.html pueda usar cualquiera de los dos personajes.
  *
  *  - Reproduce la primera animación del GLB en loop.
- *  - "Hablar" reinicia animación + audio juntos, para que queden sincronizados.
+ *  - "Hablar" reinicia animación + audio juntos; mientras suena, la animación sigue
+ *    el tiempo del audio (incluye la boca horneada por tools/add-jaw.mjs).
  *  - Ajusta la altura del personaje a `targetHeight` metros y apoya los pies en y = 0.
  */
 import * as THREE from 'three';
@@ -54,6 +55,7 @@ export class GlbActor extends EventTarget {
 
   attachAudio(audioEl) {
     this.audio = audioEl;
+    audioEl.loop = true; // igual que el visor nativo: voz y animación se repiten juntas
     audioEl.addEventListener('play', () => this.dispatchEvent(new Event('audio-play')));
     audioEl.addEventListener('ended', () => this.dispatchEvent(new Event('audio-end')));
   }
@@ -85,6 +87,12 @@ export class GlbActor extends EventTarget {
   }
 
   update(dt) {
-    this.mixer.update(dt);
+    if (this.action && this.speaking) {
+      // La animación sigue al reloj del audio → boca y voz siempre sincronizadas
+      this.action.time = Math.min(this.audio.currentTime, this.clip.duration - 1e-3);
+      this.mixer.update(0);
+    } else {
+      this.mixer.update(dt);
+    }
   }
 }
