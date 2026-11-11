@@ -1,0 +1,19 @@
+{
+  "name": "campesino-webar",
+  "version": "1.0.0",
+  "description": "Demo WebAR de un campesino colombiano 3D procedural (Three.js + WebXR)",
+  "scripts": {
+    "serve": "python3 serve.py",
+    "export-glb": "node tools/export-glb.mjs",
+    "bake": "node tools/bake-presentacion.mjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "gltf-validator": "^2.0.0-dev.3.10",
+    "qrcode-generator": "^2.0.4",
+    "three": "^0.187.0"
+  },
+  "type": "module"
+}

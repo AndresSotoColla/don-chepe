@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#3b2a20">
+<title>Don Chepe · Abrir en RA</title>
+<link rel="stylesheet" href="css/ui.css">
+<style>
+  body { background: radial-gradient(circle at 50% 30%, #3b2a20, #120c09); color: #fff; min-height: 100%; }
+  .center { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 24px; text-align: center; }
+  .center p { color: #d9c8b4; max-width: 34ch; line-height: 1.5; margin: 0; }
+  .big { font-size: 18px; padding: 16px 26px; }
+  .spinner { width: 42px; height: 42px; border: 4px solid rgba(255,255,255,.2); border-top-color: #e0b04a; border-radius: 50%; animation: s 0.9s linear infinite; }
+  @keyframes s { to { transform: rotate(360deg); } }
+  a.small { color: #d9c8b4; font-size: 14px; }
+</style>
+</head>
+<body>
+<div class="center">
+  <div class="spinner" id="spin"></div>
+  <h1 style="margin:0;font-size:24px">🤠 Abriendo a Don Chepe…</h1>
+  <p id="txt">Se abrirá la cámara. Apunta al piso y mueve el teléfono despacio: el campesino aparecerá solo y empezará a hablar.</p>
+  <a class="btn primary big hidden" id="go" href="#">📷 Ver en mi espacio</a>
+  <a class="small hidden" id="webar" href="ar.html">Usar la versión web (con botones)</a>
+</div>
+<script>
+/*
+ * Modo QR directo: abre el visor de RA nativo de Android (Scene Viewer, incluido en
+ * "Servicios de Google Play para RA"), directamente en modo cámara (ar_only), con el
+ * GLB de una sola animación y el MP3 sincronizado. Si el teléfono no lo tiene, Chrome
+ * abre la versión WebAR (ar.html) como respaldo.
+ */
+const base = new URL('.', location.href);
+const enc = encodeURIComponent;
+const glb = new URL('models/campesino-presentacion.glb', base).href;
+const sound = new URL('audio/saludo.mp3', base).href;
+const fallback = new URL('ar.html', base).href;
+
+const params = [
+  'file=' + enc(glb),
+  'mode=ar_only',
+  'sound=' + enc(sound),
+  'title=' + enc('Don Chepe'),
+  'resizable=true',
+].join('&');
+const intent = `intent://arvr.google.com/scene-viewer/1.2?${params}` +
+  `#Intent;scheme=https;package=com.google.ar.core;action=android.intent.action.VIEW;` +
+  `S.browser_fallback_url=${enc(fallback)};end;`;
+
+const $ = (id) => document.getElementById(id);
+const android = /Android/i.test(navigator.userAgent);
+const iOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+const publicHttps = location.protocol === 'https:' && !/^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(location.hostname);
+
+if (android) {
+  $('go').href = intent;
+  if (!publicHttps) {
+    // Scene Viewer descarga el modelo por su cuenta y no acepta certificados autofirmados
+    $('spin').classList.add('hidden');
+    $('txt').textContent = 'El modo directo necesita que el proyecto esté publicado con HTTPS real (por ejemplo GitHub Pages). En la red local usa la versión web.';
+    $('webar').classList.remove('hidden');
+    $('webar').className = 'btn primary big';
+    $('webar').textContent = '📷 Abrir versión web';
+  } else {
+    // Intento automático; si Chrome exige un toque, aparece el botón
+    location.href = intent;
+    setTimeout(() => {
+      $('spin').classList.add('hidden');
+      $('go').classList.remove('hidden');
+      $('webar').classList.remove('hidden');
+    }, 1200);
+  }
+} else if (iOS) {
+  location.replace('viewer.html');
+} else {
+  $('spin').classList.add('hidden');
+  $('txt').textContent = 'Este enlace es para abrirlo desde un teléfono Android. En el computador puedes usar el visor 3D.';
+  $('webar').classList.remove('hidden');
+  $('webar').href = 'viewer.html';
+  $('webar').className = 'btn primary big';
+  $('webar').textContent = 'Abrir visor 3D';
+}
+</script>
+</body>
+</html>

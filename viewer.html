@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Don Chepe · Visor 3D</title>
+<link rel="stylesheet" href="css/ui.css">
+<script type="importmap">
+{ "imports": {
+  "three": "./vendor/three/three.module.js",
+  "three/addons/": "./vendor/three/addons/"
+} }
+</script>
+</head>
+<body class="viewer">
+<canvas id="c"></canvas>
+
+<header class="topbar">
+  <a href="index.html" class="brand">← Don Chepe</a>
+  <span class="tag">Visor 3D · sin WebXR</span>
+</header>
+
+<aside class="panel" id="panel">
+  <h2>Animaciones</h2>
+  <div class="grid">
+    <button data-anim="Saludo">👋 Saludar</button>
+    <button data-anim="Brazos">🙌 Mover brazos</button>
+    <button data-anim="Cabeza">🙂 Cabeza</button>
+    <button id="talkLoop" aria-pressed="false">💬 Boca (loop)</button>
+  </div>
+
+  <h2>Audio + lip-sync</h2>
+  <div class="grid">
+    <button id="speak" class="primary">▶ Hablar con audio</button>
+    <button id="stop">■ Detener</button>
+  </div>
+  <label class="file">Cargar otro MP3
+    <input type="file" id="mp3" accept="audio/mpeg,audio/*">
+  </label>
+  <div class="meter"><span id="level"></span></div>
+  <p class="hint" id="audioName">audio/saludo.mp3</p>
+
+  <h2>Vista</h2>
+  <div class="grid">
+    <label class="check"><input type="checkbox" id="autorot"> Auto-rotar</label>
+    <label class="check"><input type="checkbox" id="wire"> Alambre</label>
+  </div>
+  <div class="grid">
+    <button data-view="front">Frente</button>
+    <button data-view="side">Lado</button>
+    <button data-view="back">Espalda</button>
+    <button data-view="top">Arriba</button>
+  </div>
+
+  <h2>Exportar</h2>
+  <div class="grid">
+    <button id="exportGlb">⬇ GLB animado</button>
+    <a class="btn" href="models/campesino.glb" download>GLB pre-generado</a>
+    <button id="exportPres" style="grid-column:1/-1">⬇ GLB para QR directo (con este MP3)</button>
+  </div>
+  <p class="hint" id="status"></p>
+</aside>
+<button class="panel-toggle" id="panelToggle">☰</button>
+
+<audio id="voice" src="audio/saludo.mp3" preload="auto" crossorigin="anonymous"></audio>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
+import { buildCampesino, mouthEnvelope, buildPresentacion } from './js/campesino.js';
+import { CampesinoAnimator } from './js/animator.js';
+
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xdfeee0);
+scene.fog = new THREE.Fog(0xdfeee0, 6, 14);
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+scene.environmentIntensity = 0.6;
+
+const camera = new THREE.PerspectiveCamera(35, 1, 0.05, 50);
+camera.position.set(1.7, 1.45, 3.9);
+const controls = new OrbitControls(camera, canvas);
+controls.target.set(0, 0.92, 0);
+controls.enableDamping = true;
+controls.minDistance = 0.6;
+controls.maxDistance = 8;
+controls.maxPolarAngle = Math.PI * 0.95;
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x8a7a5a, 1.2));
+const sun = new THREE.DirectionalLight(0xfff1d6, 2.4);
+sun.position.set(2.5, 4, 2.5);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -1.5, right: 1.5, top: 2.5, bottom: -0.5, near: 0.5, far: 10 });
+sun.shadow.bias = -0.0005;
+sun.shadow.normalBias = 0.02;
+scene.add(sun);
+
+// Suelo tipo finca
+const ground = new THREE.Mesh(new THREE.CircleGeometry(2.2, 64), new THREE.MeshStandardMaterial({ color: 0x7fa65a, roughness: 1 }));
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+const ring = new THREE.Mesh(new THREE.RingGeometry(2.2, 2.35, 64), new THREE.MeshStandardMaterial({ color: 0x8a6a45, roughness: 1 }));
+ring.rotation.x = -Math.PI / 2; ring.position.y = 0.001;
+scene.add(ring);
+
+// Personaje
+const character = buildCampesino();
+scene.add(character.root);
+const anim = new CampesinoAnimator(character);
+window.__campesino = { character, anim, camera, controls, scene, renderer, THREE }; // para depuración/pruebas
+
+// Audio
+const voice = document.getElementById('voice');
+let audioAttached = false;
+function ensureAudio() {
+  if (!audioAttached) { anim.attachAudio(voice); audioAttached = true; }
+}
+document.getElementById('speak').onclick = async () => {
+  ensureAudio();
+  try { await anim.speak({ withGesture: true }); setStatus('Reproduciendo con lip-sync'); }
+  catch (e) { setStatus('No se pudo reproducir el audio: ' + e.message); }
+};
+document.getElementById('stop').onclick = () => anim.stopSpeaking();
+document.getElementById('mp3').onchange = (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  voice.src = URL.createObjectURL(f);
+  document.getElementById('audioName').textContent = f.name;
+  setStatus('MP3 cargado. Pulsa "Hablar con audio".');
+};
+anim.addEventListener('audio-end', () => setStatus('Audio terminado'));
+
+// Gestos
+document.querySelectorAll('[data-anim]').forEach((b) => (b.onclick = () => anim.play(b.dataset.anim)));
+const talkBtn = document.getElementById('talkLoop');
+talkBtn.onclick = () => {
+  const on = talkBtn.getAttribute('aria-pressed') !== 'true';
+  talkBtn.setAttribute('aria-pressed', on);
+  anim.setTalkLoop(on);
+};
+
+// Vista
+controls.autoRotateSpeed = 2;
+document.getElementById('autorot').onchange = (e) => (controls.autoRotate = e.target.checked);
+document.getElementById('wire').onchange = (e) => {
+  const mats = new Set();
+  character.root.traverse((o) => o.isMesh && mats.add(o.material));
+  mats.forEach((m) => (m.wireframe = e.target.checked));
+};
+const views = { front: [0, 1.2, 3.2], side: [3.2, 1.2, 0], back: [0, 1.2, -3.2], top: [0.01, 4, 0.6] };
+document.querySelectorAll('[data-view]').forEach((b) => (b.onclick = () => { camera.position.set(...views[b.dataset.view]); controls.target.set(0, 0.92, 0); }));
+
+// Exportar GLB (con todas las animaciones)
+document.getElementById('exportGlb').onclick = () => {
+  setStatus('Exportando…');
+  const exporter = new GLTFExporter();
+  // Exportar desde la pose de reposo
+  const saved = anim.mixer.timeScale; anim.mixer.stopAllAction();
+  exporter.parse(character.root, (glb) => {
+    const url = URL.createObjectURL(new Blob([glb], { type: 'model/gltf-binary' }));
+    const a = Object.assign(document.createElement('a'), { href: url, download: 'campesino.glb' });
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    setStatus(`GLB exportado (${(glb.byteLength / 1024).toFixed(0)} KB, ${Object.keys(character.clips).length} animaciones)`);
+    anim.idle.reset().play(); anim.current = anim.idle; anim.mixer.timeScale = saved;
+  }, (err) => setStatus('Error exportando: ' + err), { binary: true, animations: Object.values(character.clips) });
+};
+
+// GLB de una sola animación sincronizada con el MP3 actual (para Scene Viewer / QR directo)
+document.getElementById('exportPres').onclick = async () => {
+  try {
+    setStatus('Analizando el audio…');
+    const buf = await (await fetch(voice.src)).arrayBuffer();
+    const ctx = new OfflineAudioContext(1, 1, 22050);
+    const audioBuf = await ctx.decodeAudioData(buf);
+    const env = mouthEnvelope(audioBuf.getChannelData(0), audioBuf.sampleRate, 30);
+    const clip = buildPresentacion(character.clips, env);
+    const saved = anim.mixer.timeScale; anim.mixer.stopAllAction();
+    const glb = await new GLTFExporter().parseAsync(character.root, { binary: true, animations: [clip] });
+    anim.idle.reset().play(); anim.current = anim.idle; anim.mixer.timeScale = saved;
+    const url = URL.createObjectURL(new Blob([glb], { type: 'model/gltf-binary' }));
+    Object.assign(document.createElement('a'), { href: url, download: 'campesino-presentacion.glb' }).click();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    setStatus(`Listo: campesino-presentacion.glb (${clip.duration.toFixed(1)} s). Ponlo en models/ y el MP3 como audio/saludo.mp3.`);
+  } catch (e) { setStatus('Error: ' + e.message); }
+};
+
+// Vista previa de la animación "Presentacion" con su audio
+window.__previewPresentacion = async () => {
+  const buf = await (await fetch(voice.src)).arrayBuffer();
+  const audioBuf = await new OfflineAudioContext(1, 1, 22050).decodeAudioData(buf);
+  return buildPresentacion(character.clips, mouthEnvelope(audioBuf.getChannelData(0), audioBuf.sampleRate, 30));
+};
+
+// UI
+document.getElementById('panelToggle').onclick = () => document.getElementById('panel').classList.toggle('open');
+const levelEl = document.getElementById('level');
+const statusEl = document.getElementById('status');
+function setStatus(t) { statusEl.textContent = t; }
+
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+addEventListener('resize', resize);
+resize();
+
+const timer = new THREE.Timer();
+renderer.setAnimationLoop(() => {
+  timer.update(); const dt = Math.min(timer.getDelta(), 0.05);
+  anim.update(dt);
+  controls.update();
+  levelEl.style.width = (anim.level * 100).toFixed(0) + '%';
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>

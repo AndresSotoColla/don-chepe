@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#3b2a20">
+<title>Don Chepe · Realidad aumentada</title>
+<link rel="stylesheet" href="css/ui.css">
+<script type="importmap">
+{ "imports": {
+  "three": "./vendor/three/three.module.js",
+  "three/addons/": "./vendor/three/addons/"
+} }
+</script>
+</head>
+<body class="ar">
+
+<!-- Pantalla inicial -->
+<div id="start">
+  <h1>🤠 Don Chepe en tu espacio</h1>
+  <p id="intro">Toca la pantalla, permite la cámara y apunta al piso moviendo el teléfono despacio: Don Chepe aparecerá solo y empezará a hablar.</p>
+  <button id="enter" class="primary" disabled>Comprobando compatibilidad…</button>
+  <div id="unsupported" class="hidden">
+    <p id="whyNot" class="warn" style="color:#6b4e10"></p>
+    <div class="row" style="justify-content:center">
+      <a class="btn primary" href="viewer.html">Ver en 3D (sin AR)</a>
+      <a class="btn hidden" id="sceneViewer" href="#">Abrir con Scene Viewer</a>
+    </div>
+  </div>
+  <p style="font-size:12px;color:#a8957f">Sin apps, sin servicios externos. Requiere Android con Chrome y ARCore (Servicios de Google Play para RA).</p>
+</div>
+
+<!-- Interfaz dentro de la sesión AR (WebXR DOM Overlay) -->
+<div id="overlay">
+  <div class="msg" id="msg">Busca una superficie…</div>
+  <button class="close" id="exit" aria-label="Salir">✕</button>
+  <div class="bar" id="bar">
+    <button class="primary" id="speak">🔊 Hablar</button>
+    <button data-anim="Saludo">👋</button>
+    <button data-anim="Brazos">🙌</button>
+    <button data-anim="Cabeza">🙂</button>
+    <button id="smaller" aria-label="Más pequeño">−</button>
+    <button id="bigger" aria-label="Más grande">＋</button>
+    <button id="rotate" aria-label="Girar">⟳</button>
+    <button id="move">📍 Mover</button>
+  </div>
+</div>
+
+<audio id="voice" src="audio/saludo.mp3" preload="auto" crossorigin="anonymous"></audio>
+
+<script type="module">
+import * as THREE from 'three';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { buildCampesino } from './js/campesino.js';
+import { CampesinoAnimator } from './js/animator.js';
+import { loadGlbActor } from './js/glb-actor.js';
+
+const $ = (id) => document.getElementById(id);
+const params = new URLSearchParams(location.search);
+const PREVIEW = params.has('preview'); // modo de prueba en escritorio (sin cámara)
+
+/* ---------- Escena ---------- */
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.xr.enabled = true;
+renderer.shadowMap.enabled = true;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+scene.environmentIntensity = 0.6;
+const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.01, 40);
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x7a6a50, 1.3));
+const sun = new THREE.DirectionalLight(0xfff1d6, 2.2);
+sun.castShadow = true;
+sun.shadow.mapSize.set(1024, 1024);
+sun.shadow.bias = -0.0005;
+sun.shadow.normalBias = 0.02;
+scene.add(sun, sun.target);
+
+// Contenedor: posición/escala/rotación en el mundo real
+const holder = new THREE.Group();
+holder.visible = false;
+scene.add(holder);
+
+// Personaje: por defecto el modelo realista (GLB animado); ?modelo=caricatura usa el procedural
+const MODEL = params.get('modelo') || 'realista';
+let anim = null;
+if (MODEL !== 'caricatura') {
+  $('enter').textContent = 'Cargando a Don Chepe…';
+  try {
+    anim = await loadGlbActor('models/campesino-presentacion.glb', { targetHeight: 1.72 });
+  } catch (e) {
+    console.warn('No se pudo cargar el GLB; se usa la caricatura.', e);
+  }
+}
+if (!anim) anim = new CampesinoAnimator(buildCampesino());
+holder.add(anim.root);
+// El modelo GLB trae una sola animación: se ocultan los botones de gestos sueltos
+if (anim.gestures === false) document.querySelectorAll('[data-anim]').forEach((b) => b.classList.add('hidden'));
+
+// Plano invisible que solo recibe sombra (se ve la sombra sobre el piso real)
+const shadowCatcher = new THREE.Mesh(new THREE.PlaneGeometry(4, 4), new THREE.ShadowMaterial({ opacity: 0.35 }));
+shadowCatcher.rotation.x = -Math.PI / 2;
+shadowCatcher.receiveShadow = true;
+holder.add(shadowCatcher);
+
+// Retícula de colocación
+const reticle = new THREE.Group();
+reticle.matrixAutoUpdate = false;
+reticle.visible = false;
+const ringGeo = new THREE.RingGeometry(0.09, 0.115, 40).rotateX(-Math.PI / 2);
+reticle.add(new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9 })));
+reticle.add(new THREE.Mesh(new THREE.CircleGeometry(0.02, 20).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0xe0b04a })));
+scene.add(reticle);
+
+/* ---------- Estado ---------- */
+let scale = Number(params.get('scale')) || (anim.gestures === false ? 1 : 0.5); // realista a tamaño real; caricatura al 50 %
+let placed = false;
+let repositioning = true;
+let hitTestSource = null;
+let hitTestRequested = false;
+let stableHits = 0;
+const AUTO_PLACE_FRAMES = 20; // ~1/3 s de detección estable
+let session = null;
+const H = anim.root.userData.height || 1.8;
+
+function applyScale() {
+  holder.scale.setScalar(scale);
+  updateSun();
+  setMsg(`Tamaño ${(H * scale).toFixed(2)} m`);
+}
+function updateSun() {
+  // La luz sigue al personaje para que la sombra siempre se calcule bien
+  const p = holder.position;
+  sun.position.set(p.x + 1.2 * scale, p.y + 3 * scale, p.z + 1.4 * scale);
+  sun.target.position.copy(p);
+  const c = sun.shadow.camera;
+  c.left = c.bottom = -1.2 * scale; c.right = c.top = 1.2 * scale;
+  c.near = 0.1 * scale; c.far = 8 * scale;
+  c.updateProjectionMatrix();
+}
+let msgTimer;
+function setMsg(t, sticky = false) {
+  const el = $('msg');
+  el.textContent = t;
+  el.classList.remove('hidden');
+  clearTimeout(msgTimer);
+  if (!sticky) msgTimer = setTimeout(() => placed && el.classList.add('hidden'), 2500);
+}
+
+/** Coloca el personaje en una pose (matriz 4x4) mirando hacia la cámara. */
+const _pos = new THREE.Vector3(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(), _cam = new THREE.Vector3();
+function placeAt(matrix) {
+  matrix.decompose(_pos, _q, _s);
+  holder.position.copy(_pos);
+  const xrCam = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
+  xrCam.getWorldPosition(_cam);
+  holder.rotation.set(0, Math.atan2(_cam.x - _pos.x, _cam.z - _pos.z), 0);
+  holder.visible = true;
+  const first = !placed;
+  placed = true;
+  repositioning = false;
+  reticle.visible = false;
+  applyScale();
+  if (first) {
+    anim.speak({ withGesture: true }).catch(() => anim.play('Saludo'));
+  } else {
+    anim.play('Saludo');
+  }
+}
+
+/* ---------- Controles de la interfaz ---------- */
+const bar = $('bar');
+// Evita que tocar un botón del overlay también dispare "select" (colocar) en WebXR
+for (const el of [$('bar'), $('exit')]) el.addEventListener('beforexrselect', (e) => e.preventDefault());
+bar.querySelectorAll('[data-anim]').forEach((b) => (b.onclick = () => anim.play(b.dataset.anim)));
+$('speak').onclick = () => (anim.speaking ? anim.stopSpeaking() : anim.speak({ withGesture: true }));
+$('smaller').onclick = () => { scale = Math.max(0.08, scale / 1.25); applyScale(); };
+$('bigger').onclick = () => { scale = Math.min(1.5, scale * 1.25); applyScale(); };
+$('rotate').onclick = () => { holder.rotation.y += Math.PI / 4; };
+$('move').onclick = () => { repositioning = true; setMsg('Toca una superficie para mover a Don Chepe', true); };
+$('exit').onclick = () => session && session.end();
+anim.addEventListener('audio-play', () => ($('speak').textContent = '⏸ Pausa'));
+anim.addEventListener('audio-end', () => ($('speak').textContent = '🔊 Hablar'));
+$('voice').addEventListener('pause', () => ($('speak').textContent = '🔊 Hablar'));
+
+/* ---------- WebXR ---------- */
+async function checkSupport() {
+  const enter = $('enter');
+  if (PREVIEW) { enter.disabled = false; enter.textContent = 'Vista previa (sin cámara)'; return; }
+  let reason = '';
+  if (!window.isSecureContext) reason = 'Esta página no se abrió por HTTPS. WebXR solo funciona en HTTPS (o en localhost). Usa la URL https:// que muestra serve.py o publícala en GitHub Pages.';
+  else if (!navigator.xr) reason = 'Este navegador no tiene WebXR. En Android usa Google Chrome actualizado.';
+  else {
+    try {
+      if (!(await navigator.xr.isSessionSupported('immersive-ar'))) reason = 'Este dispositivo no soporta WebXR AR. Verifica que tenga "Servicios de Google Play para RA" (ARCore) instalado y actualizado.';
+    } catch (e) { reason = 'No se pudo consultar WebXR: ' + e.message; }
+  }
+  if (!reason) { enter.disabled = false; enter.textContent = '📷 Toca para empezar'; return; }
+
+  enter.classList.add('hidden');
+  $('unsupported').classList.remove('hidden');
+  $('whyNot').textContent = reason;
+  // Alternativa en Android: Scene Viewer de ARCore con el GLB animado (sin lip-sync)
+  if (/Android/i.test(navigator.userAgent)) {
+    const enc = encodeURIComponent;
+    const glb = new URL('models/campesino-presentacion.glb', location.href).href;
+    const sound = new URL('audio/saludo.mp3', location.href).href;
+    const fallback = new URL('viewer.html', location.href).href;
+    const sv = $('sceneViewer');
+    sv.href = `intent://arvr.google.com/scene-viewer/1.2?file=${enc(glb)}&mode=ar_preferred&sound=${enc(sound)}&title=${enc('Don Chepe')}` +
+      `#Intent;scheme=https;package=com.google.ar.core;action=android.intent.action.VIEW;S.browser_fallback_url=${enc(fallback)};end;`;
+    sv.classList.remove('hidden');
+  }
+}
+
+async function prepareAudio() {
+  // Debe ocurrir dentro del toque del usuario para que Android permita el audio después
+  const voice = $('voice');
+  anim.attachAudio(voice);
+  await anim.unlock();
+  try { voice.muted = true; await voice.play(); voice.pause(); voice.currentTime = 0; } catch (_) {}
+  voice.muted = false;
+}
+
+let starting = false;
+async function start() {
+  if (starting || session) return;
+  starting = true;
+  try { await startSession(); } finally { starting = false; }
+}
+// Un solo toque en cualquier parte de la pantalla inicia la cámara (los navegadores
+// exigen un gesto del usuario para abrir la cámara AR y reproducir audio).
+$('start').addEventListener('click', (e) => {
+  if (e.target.closest('a')) return;
+  const enter = $('enter');
+  if (!enter.disabled && !enter.classList.contains('hidden')) start();
+});
+
+async function startSession() {
+  await prepareAudio().catch(() => {});
+  if (PREVIEW) return startPreview();
+  try {
+    session = await navigator.xr.requestSession('immersive-ar', {
+      requiredFeatures: ['hit-test'],
+      optionalFeatures: ['dom-overlay', 'local-floor'],
+      domOverlay: { root: $('overlay') },
+    });
+  } catch (e) {
+    alert('No se pudo iniciar la sesión AR: ' + e.message);
+    return;
+  }
+  renderer.xr.setReferenceSpaceType('local');
+  await renderer.xr.setSession(session);
+  $('start').classList.add('hidden');
+  $('overlay').classList.add('on');
+  stableHits = 0;
+  setMsg('Apunta al piso y mueve el teléfono despacio…', true);
+
+  session.addEventListener('select', () => {
+    if (repositioning && reticle.visible) placeAt(reticle.matrix);
+  });
+  session.addEventListener('end', () => {
+    hitTestSource = null; hitTestRequested = false; session = null;
+    placed = false; repositioning = true; holder.visible = false;
+    anim.stopSpeaking();
+    $('overlay').classList.remove('on');
+    $('start').classList.remove('hidden');
+  });
+}
+
+/* ---------- Vista previa de escritorio (para depurar la colocación) ---------- */
+function startPreview() {
+  $('start').classList.add('hidden');
+  $('overlay').classList.add('on');
+  scene.background = new THREE.Color(0x9a9a92);
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(10, 10), new THREE.MeshStandardMaterial({ color: 0xb8b2a2 }));
+  floor.rotation.x = -Math.PI / 2; floor.position.y = -0.001;
+  scene.add(floor);
+  const hh = H * scale;
+  camera.position.set(0.35 * hh, 0.75 * hh, 1.9 * hh);
+  camera.lookAt(0, 0.45 * hh, 0);
+  placeAt(new THREE.Matrix4());
+  $('move').onclick = () => setMsg('En vista previa no hay superficies reales');
+}
+
+/* ---------- Bucle de render ---------- */
+const timer = new THREE.Timer();
+renderer.setAnimationLoop((time, frame) => {
+  timer.update();
+  const dt = Math.min(timer.getDelta(), 0.05);
+
+  if (frame) {
+    const refSpace = renderer.xr.getReferenceSpace();
+    const xrSession = renderer.xr.getSession();
+    if (!hitTestRequested) {
+      hitTestRequested = true;
+      xrSession.requestReferenceSpace('viewer').then((viewerSpace) =>
+        xrSession.requestHitTestSource({ space: viewerSpace }).then((src) => (hitTestSource = src)));
+    }
+    if (hitTestSource && repositioning) {
+      const hits = frame.getHitTestResults(hitTestSource);
+      if (hits.length) {
+        const pose = hits[0].getPose(refSpace);
+        reticle.visible = true;
+        reticle.matrix.fromArray(pose.transform.matrix);
+        // Colocación automática: al detectar el piso de forma estable, aparece solo
+        if (!placed && ++stableHits >= AUTO_PLACE_FRAMES) placeAt(reticle.matrix);
+      } else {
+        reticle.visible = false;
+        stableHits = 0;
+      }
+    }
+  }
+
+  if (holder.visible) anim.update(dt);
+  renderer.render(scene, camera);
+});
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+window.__ar = { anim, holder, placeAt, THREE };
+checkSupport();
+</script>
+</body>
+</html>
